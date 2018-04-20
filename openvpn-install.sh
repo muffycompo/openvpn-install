@@ -6,6 +6,9 @@
 # bulletproof but it will probably work if you simply want to setup a VPN on
 # your Debian/Ubuntu/CentOS box. It has been designed to be as unobtrusive and
 # universal as possible.
+# Adapted from https://github.com/Nyr/openvpn-install
+# 
+# Modified by Mfawa Alfred Onen for DigitalOcean 
 
 
 # Detect Debian users running the script with "sh" instead of bash
@@ -124,24 +127,26 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 				PORT=$(grep '^port ' /etc/openvpn/server.conf | cut -d " " -f 2)
 				PROTOCOL=$(grep '^proto ' /etc/openvpn/server.conf | cut -d " " -f 2)
 				if pgrep firewalld; then
-					IP=$(firewall-cmd --direct --get-rules ipv4 nat POSTROUTING | grep '\-s 10.8.0.0/24 '"'"'!'"'"' -d 10.8.0.0/24 -j SNAT --to ' | cut -d " " -f 10)
 					# Using both permanent and not permanent rules to avoid a firewalld reload.
 					firewall-cmd --zone=public --remove-port=$PORT/$PROTOCOL
-					firewall-cmd --zone=trusted --remove-source=10.8.0.0/24
+					firewall-cmd --zone=trusted --remove-source=172.16.100.0/24
 					firewall-cmd --permanent --zone=public --remove-port=$PORT/$PROTOCOL
-					firewall-cmd --permanent --zone=trusted --remove-source=10.8.0.0/24
-					firewall-cmd --direct --remove-rule ipv4 nat POSTROUTING 0 -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
-					firewall-cmd --permanent --direct --remove-rule ipv4 nat POSTROUTING 0 -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
+					firewall-cmd --permanent --zone=trusted --remove-source=172.16.100.0/24
+					firewall-cmd --direct --remove-rule ipv4 nat POSTROUTING 0 -s 172.16.100.0/24 -o eth0 -j MASQUERADE
+					firewall-cmd --direct --remove-rule ipv4 nat POSTROUTING 1 -s 172.16.100.0/24 -o eth1 -j MASQUERADE
+					firewall-cmd --permanent --direct --remove-rule ipv4 nat POSTROUTING 0 -s 172.16.100.0/24 -o eth0 -j MASQUERADE
+					firewall-cmd --permanent --direct --remove-rule ipv4 nat POSTROUTING 1 -s 172.16.100.0/24 -o eth1 -j MASQUERADE
 				else
-					IP=$(grep 'iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to ' $RCLOCAL | cut -d " " -f 14)
-					iptables -t nat -D POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
-					sed -i '/iptables -t nat -A POSTROUTING -s 10.8.0.0\/24 ! -d 10.8.0.0\/24 -j SNAT --to /d' $RCLOCAL
+					iptables -t nat -A POSTROUTING -s 172.16.100.0/24 -o eth0 -j MASQUERADE
+					iptables -t nat -A POSTROUTING -s 172.16.100.0/24 -o eth1 -j MASQUERADE
+					sed -i '/iptables -t nat -A POSTROUTING -s 172.16.100.0\/24 -o eth0 -j MASQUERADE /d' $RCLOCAL
+					sed -i '/iptables -t nat -A POSTROUTING -s 172.16.100.0\/24 -o eth1 -j MASQUERADE /d' $RCLOCAL
 					if iptables -L -n | grep -qE '^ACCEPT'; then
 						iptables -D INPUT -p $PROTOCOL --dport $PORT -j ACCEPT
-						iptables -D FORWARD -s 10.8.0.0/24 -j ACCEPT
+						iptables -D FORWARD -s 172.16.100.0/24 -j ACCEPT
 						iptables -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
 						sed -i "/iptables -I INPUT -p $PROTOCOL --dport $PORT -j ACCEPT/d" $RCLOCAL
-						sed -i "/iptables -I FORWARD -s 10.8.0.0\/24 -j ACCEPT/d" $RCLOCAL
+						sed -i "/iptables -I FORWARD -s 172.16.100.0\/24 -j ACCEPT/d" $RCLOCAL
 						sed -i "/iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT/d" $RCLOCAL
 					fi
 				fi
@@ -260,7 +265,7 @@ dh dh.pem
 auth SHA512
 tls-auth ta.key 0
 topology subnet
-server 10.8.0.0 255.255.255.0
+server 172.16.100.0 255.255.255.0
 ifconfig-pool-persist ipp.txt" > /etc/openvpn/server.conf
 	echo 'push "redirect-gateway def1 bypass-dhcp"' >> /etc/openvpn/server.conf
 	# DNS
@@ -318,12 +323,14 @@ crl-verify crl.pem" >> /etc/openvpn/server.conf
 		# We don't use --add-service=openvpn because that would only work with
 		# the default port and protocol.
 		firewall-cmd --zone=public --add-port=$PORT/$PROTOCOL
-		firewall-cmd --zone=trusted --add-source=10.8.0.0/24
+		firewall-cmd --zone=trusted --add-source=172.16.100.0/24
 		firewall-cmd --permanent --zone=public --add-port=$PORT/$PROTOCOL
-		firewall-cmd --permanent --zone=trusted --add-source=10.8.0.0/24
+		firewall-cmd --permanent --zone=trusted --add-source=172.16.100.0/24
 		# Set NAT for the VPN subnet
-		firewall-cmd --direct --add-rule ipv4 nat POSTROUTING 0 -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
-		firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
+		firewall-cmd --direct --add-rule ipv4 nat POSTROUTING 0 -s 172.16.100.0/24 -o eth0 -j MASQUERADE
+		firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s 172.16.100.0/24 -o eth0 -j MASQUERADE
+		firewall-cmd --direct --add-rule ipv4 nat POSTROUTING 1 -s 172.16.100.0/24 -o eth1 -j MASQUERADE
+		firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 1 -s 172.16.100.0/24 -o eth1 -j MASQUERADE
 	else
 		# Needed to use rc.local with some systemd distros
 		if [[ "$OS" = 'debian' && ! -e $RCLOCAL ]]; then
@@ -332,17 +339,19 @@ exit 0' > $RCLOCAL
 		fi
 		chmod +x $RCLOCAL
 		# Set NAT for the VPN subnet
-		iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
-		sed -i "1 a\iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP" $RCLOCAL
+		iptables -t nat -A POSTROUTING -s 172.16.100.0/24 -o eth0 -j MASQUERADE
+		iptables -t nat -A POSTROUTING -s 172.16.100.0/24 -o eth1 -j MASQUERADE
+		sed -i "1 a\iptables -t nat -A POSTROUTING -s 172.16.100.0/24 -o eth0 -j MASQUERADE" $RCLOCAL
+		sed -i "1 a\iptables -t nat -A POSTROUTING -s 172.16.100.0/24 -o eth1 -j MASQUERADE" $RCLOCAL
 		if iptables -L -n | grep -qE '^(REJECT|DROP)'; then
 			# If iptables has at least one REJECT rule, we asume this is needed.
 			# Not the best approach but I can't think of other and this shouldn't
 			# cause problems.
 			iptables -I INPUT -p $PROTOCOL --dport $PORT -j ACCEPT
-			iptables -I FORWARD -s 10.8.0.0/24 -j ACCEPT
+			iptables -I FORWARD -s 172.16.100.0/24 -j ACCEPT
 			iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
 			sed -i "1 a\iptables -I INPUT -p $PROTOCOL --dport $PORT -j ACCEPT" $RCLOCAL
-			sed -i "1 a\iptables -I FORWARD -s 10.8.0.0/24 -j ACCEPT" $RCLOCAL
+			sed -i "1 a\iptables -I FORWARD -s 172.16.100.0/24 -j ACCEPT" $RCLOCAL
 			sed -i "1 a\iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT" $RCLOCAL
 		fi
 	fi
